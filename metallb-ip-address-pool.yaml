@@ -1,0 +1,28 @@
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: red-pool
+  namespace: metallb-system
+spec:
+  addresses:
+  # CIDR example
+  #- 192.168.10.0/24
+  # ip ranges example
+  - 192.168.12.240-192.168.12.243
+  # ipv6 example
+  #- fc00:f853:0ccd:e799::/124
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: blue-pool
+  namespace: metallb-system
+spec:
+  addresses:
+  # CIDR example
+  #- 192.168.10.0/24
+  # ip ranges example
+  - 192.168.12.250-192.168.12.253
+  # ipv6 example
+  #- fc00:f853:0ccd:e799::/124
+

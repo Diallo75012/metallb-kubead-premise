@@ -1,0 +1,178 @@
+## installation
+
+# need to edit the configmap of kube-proxy from the namespace kube-system
+kubectl get kube-proxy -n kube-system -o yaml > metallb-kube-proxy-ipvs-update.yaml
+
+# then set it to true which is normally set to false as default
+ipvs:
+  strictARPS: true
+
+# install metallb native
+kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.3/config/manifests/metallb-native.yaml
+
+# outputs of 'kubectl get all -n metallb-system -o wide':
+NAME                              READY   STATUS    RESTARTS   AGE    IP                NODE             NOMINATED NODE   READINESS GATES
+pod/controller-5c46fdb5b8-76grv   1/1     Running   0          4m6s   172.16.143.23     worker1.net      <none>           <none>
+pod/speaker-82dpk                 1/1     Running   0          4m6s   192.168.186.146   controller.net   <none>           <none>
+pod/speaker-88jbp                 1/1     Running   0          4m6s   192.168.186.151   worker1.net      <none>           <none>
+pod/speaker-gg6sk                 1/1     Running   0          4m6s   192.168.186.152   worker2.net      <none>           <none>
+
+NAME                      TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE    SELECTOR
+service/webhook-service   ClusterIP   10.102.30.109   <none>        443/TCP   4m6s   component=controller
+
+NAME                     DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR            AGE    CONTAINERS   IMAGES                            SELECTOR
+daemonset.apps/speaker   3         3         3       3            3           kubernetes.io/os=linux   4m6s   speaker      quay.io/metallb/speaker:v0.14.3   app=metallb,component=speaker
+
+NAME                         READY   UP-TO-DATE   AVAILABLE   AGE    CONTAINERS   IMAGES                               SELECTOR
+deployment.apps/controller   1/1     1            1           4m6s   controller   quay.io/metallb/controller:v0.14.3   app=metallb,component=controller
+
+NAME                                    DESIRED   CURRENT   READY   AGE    CONTAINERS   IMAGES                               SELECTOR
+replicaset.apps/controller-5c46fdb5b8   1         1         1       4m6s   controller   quay.io/metallb/controller:v0.14.3   app=metallb,component=controller,pod-template-hash=5c46fdb5b8
+
+# outputs of 'kubectl get secrets -n metallb-system -o wide':
+NAME                  TYPE     DATA   AGE
+memberlist            Opaque   1      3m51s
+webhook-server-cert   Opaque   4      4m17s
+
+# where to deploy resources?
+Resources must be deployed in the namespace where metallb is deployed
+
+# behavior of metallb and deployed resources
+metallb will stay idle until resources are deployed in its namespace but it need ipaddresspool to be defined to distribute ip addresses
+
+# set ipaddresspool
+# example ipaddresspool. it can be cidr, address ranges, ipv6 also..
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: first-pool
+  namespace: metallb-system
+spec:
+  addresses:
+  # CIDR example
+  #- 192.168.10.0/24
+  # ip ranges example
+  - 192.168.1.240-192.168.1.250
+  # ipv6 example
+  #- fc00:f853:0ccd:e799::/124
+
+# L2 linked to ipaddresspool: then set L2Advertisements for the address pool (can use also GBP but i don't want to have issues with Calico which already using it well)
+The IP from a given IPAddressPool is advertised using the union of all the L2Advertisements referencing it.
+eg.:
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: example-advertisement10
+  namespace: metallb-system
+spec:
+  ipaddresspools:
+  - first-pool  # select which addresspool you want. if no addresspool selector is defined, it will use the available ones)
+  nodeSelector:
+  - kubernetes.io/hostname: worker1.net  # choose the node
+  interfaces:
+  - ensxx   # also you can choose the interface
+
+# we will use this one for our lab
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: red-blue-addr-pools-advertisement
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+  - red-pool
+  - blue-pool
+
+# then setup service and type to loadbalancer and metallb will take care fo the rest
+type: LoadBalancer
+
+## annotation to add to your resource service deployment to have some extra
+# this annotation to have a specific ip address for the LB
+...
+metadata:
+  ...
+  annotations:
+    metallb.universe.tf/loadBalancerIPs: 192.168.1.100
+
+# this to have any address form a selected ipaddresspool already available
+...
+metadata:
+  ...
+  annotations:
+    metallb.universe.tf/address-pool: production-public-ips
+
+# this to allow shared aip address, so multiple services having same ip but they are rules and the one that i get the most is that they should serve different ports or different protocol, here TCP VS UDP in same ip with same port so protocol is different so it will work:
+...
+metadata:
+  ...
+  annotations:
+    metallb.universe.tf/allow-shared-ip: "key-to-share-1.2.3.4"
+spec:
+  type: LoadBalancer
+  loadBalancerIP: 1.2.3.4
+  ports:
+    - name: dnsudp
+      protocol: UDP
+      port: 53
+      targetPort: 53
+  selector:
+    app: dns
+---
+...
+metadata:
+  ...
+  annotations:
+    metallb.universe.tf/allow-shared-ip: "key-to-share-1.2.3.4"
+spec:
+  type: LoadBalancer
+  loadBalancerIP: 1.2.3.4
+  ports:
+    - name: dnstcp
+      protocol: TCP
+      port: 53
+      targetPort: 53
+  selector:
+    app: dns
+
+# another shared ip for different services in different port
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-http
+  annotations:
+    metallb.universe.tf/address-pool: doc-example
+    metallb.universe.tf/allow-shared-ip: "web-server-svc"  
+spec:
+  ports:
+    - name: http
+      port: 80  
+      protocol: TCP
+      targetPort: 8080
+  selector:
+    <label_key>: <label_value>  
+  type: LoadBalancer
+  loadBalancerIP: 172.31.249.7  
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-https
+  annotations:
+    metallb.universe.tf/address-pool: doc-example
+    metallb.universe.tf/allow-shared-ip: "web-server-svc"  
+spec:
+  ports:
+    - name: https
+      port: 443  
+      protocol: TCP
+      targetPort: 8080
+  selector:
+    <label_key>: <label_value>  
+  type: LoadBalancer
+  loadBalancerIP: 172.31.249.7  
+
+
+
+
+
+

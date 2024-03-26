@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: red-html-configmap
+  namespace: default
+data:
+  index.html: |
+    <html>
+    <h1 style="color:red;">Creditizens</h1>
+    </br>
+    <h1 style="color:red;">Kubernetes MetalLB RED </h1>
+    </html>
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx1
+  # we can set this to target an address pool so get an ip from the range set there
+  annotations:
+    # red-pool here set to : 192.168.12.240-192.168.12.243
+    metallb.universe.tf/address-pool: red-pool
+    # this annotation for sharing same LB ip for different services , port must be different or protocal  and the value of this annotation must be same in the sharing other services 
+    metallb.universe.tf/allow-shared-ip: red-blue-sharing-same-lb-ip
+  # can ad this annitation to have a specific address for the LB of this service
+  #annotations:
+    #metallb.universe.tf/loadBalancerIPs: 192.168.12.252
+spec:
+  type: LoadBalancer
+  # to be set when sharing same LB ip with other service but protocal or port should be different from other service
+  loadBalancerIP: 192.168.12.242
+  ports:
+    # name and protocal should be added when using sharing same LB ip otherwise don't need
+    - name: http-red
+      protocol: TCP
+      port: 81
+      targetPort: 80
+  selector:
+    app: nginx1
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx1
+  template:
+    metadata:
+      labels:
+        app: nginx1
+    spec:
+      containers:
+      - name: nginx1
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: red-creditizens
+          mountPath: /usr/share/nginx/html/
+      volumes:
+      - name: red-creditizens
+        configMap:
+          name: red-html-configmap
